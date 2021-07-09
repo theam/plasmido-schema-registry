@@ -1,0 +1,36 @@
+# OSX
+#
+.DS_Store
+
+# node.js
+#
+node_modules
+npm-debug.log
+yarn-error.log
+junit.xml
+test-report.xml
+.eslintcache
+
+# Others
+#
+trash
+
+\.vscode/
+\.vs/
+
+# confluent-schema-registry
+#
+tmp
+dist
+release
+
+# website
+#
+build
+*.swp
+*~
+
+# test
+docker-compose.dockest-generated.yml
+dockest-error.json
+/.idea
