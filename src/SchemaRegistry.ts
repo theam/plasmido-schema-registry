@@ -18,7 +18,8 @@ import {
   ConfluentSubject,
   SchemaRegistryAPIClientOptions,
   AvroConfluentSchema,
-  ExtendedAvroSchema, ResponseSchema,
+  ExtendedAvroSchema,
+  ResponseSchema,
 } from './@types'
 import {
   helperTypeFromSchemaType,
@@ -29,7 +30,7 @@ import {
 import { cloneDeep } from 'lodash'
 
 export interface RegisteredSchema {
-  id: number,
+  id: number
   subject: string
 }
 

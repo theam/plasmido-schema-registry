@@ -1,6 +1,6 @@
 {
-  "name": "@plasmido/plasmido-schema-registry",
-  "version": "0.0.1",
+  "name": "@theagilemonkeys/plasmido-schema-registry",
+  "version": "0.1.3",
   "main": "dist/index.js",
   "description": "ConfluentSchemaRegistry is a library that makes it easier to interact with the Confluent schema registry, it provides convenient methods to encode, decode and register new schemas using the Apache Avro serialization format.",
   "keywords": [
@@ -9,8 +9,12 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/gonzalogarciajaubert/plasmido-schema-registry"
+    "url": "https://github.com/theam/plasmido-schema-registry"
   },
+  "homepage": "http://www.plasmido.com",
+  "license": "Apache-2.0",
+  "author": "TheAgileMonkeys - Gonzalo García Jaubert <gonzalo@theagilemonkeys.com>",
+  "productName": "Plasmido Schema Registry",
   "scripts": {
     "build": "rm -rf ./dist && tsc",
     "build:watch": "rm -rf ./dist && tsc --watch",
@@ -19,7 +23,15 @@
     "test": "ts-node ./dockest.ts",
     "test:debug": "ts-node ./dockest.ts debug",
     "lint": "eslint './src/**/*.ts'",
-    "format": "yarn lint --fix"
+    "format": "yarn lint --fix",
+    "publish": "clean-publish --without-publish"
+  },
+  "clean-publish": {
+    "files": [
+      "plasmido-schema-registry.iml",
+      ".idea",
+      "fixtures"
+    ]
   },
   "dependencies": {
     "ajv": "^7.1.0",
@@ -39,6 +51,7 @@
     "@typescript-eslint/eslint-plugin": "^2.1.0",
     "@typescript-eslint/parser": "^2.1.0",
     "@typescript-eslint/typescript-estree": "^2.1.0",
+    "clean-publish": "^3.0.3",
     "dockest": "^2.1.0",
     "eslint": "^6.3.0",
     "eslint-config-prettier": "^6.1.0",
