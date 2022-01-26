@@ -21,7 +21,6 @@ interface Field {
 
 let cache: any
 const merge = Object.assign
-// @ts-ignore
 const isObject = (obj: unknown): obj is Obj => obj && typeof obj === 'object'
 const isIterable = (obj: unknown): obj is Iterable =>
   isObject(obj) && typeof obj.map !== 'undefined'

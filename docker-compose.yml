@@ -26,6 +26,8 @@ services:
     environment:
       SCHEMA_REGISTRY_KAFKASTORE_CONNECTION_URL: 'zooKeeper:2181'
       SCHEMA_REGISTRY_HOST_NAME: localhost
+      SCHEMA_REGISTRY_ACCESS_CONTROL_ALLOW_METHODS: GET,POST,PUT,OPTIONS
+      SCHEMA_REGISTRY_ACCESS_CONTROL_ALLOW_ORIGIN: '*'
     image: 'confluentinc/cp-schema-registry:5.5.3'
     ports:
       - '8982:8081'

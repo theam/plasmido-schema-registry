@@ -1,16 +1,35 @@
-import { Schema, JsonOptions, ConfluentSchema } from './@types'
-import Ajv, { DefinedError, ValidateFunction } from 'ajv'
+import { Schema, JsonOptions, JsonConfluentSchema } from './@types'
+import Ajv from 'ajv'
 import { ConfluentSchemaRegistryValidationError } from './errors'
 
+interface BaseAjvValidationError {
+  data?: unknown
+  schema?: unknown
+}
+
+interface OldAjvValidationError extends BaseAjvValidationError {
+  dataPath: string
+  instancePath?: string
+}
+interface NewAjvValidationError extends BaseAjvValidationError {
+  instancePath: string
+}
+
+type AjvValidationError = OldAjvValidationError | NewAjvValidationError
+
+export interface ValidateFunction {
+  (this: any, data: any): boolean
+  errors?: null | AjvValidationError[]
+}
 export default class JsonSchema implements Schema {
   private validate: ValidateFunction
 
-  constructor(schema: ConfluentSchema, opts?: JsonOptions) {
+  constructor(schema: JsonConfluentSchema, opts?: JsonOptions) {
     this.validate = this.getJsonSchema(schema, opts)
   }
 
-  private getJsonSchema(schema: ConfluentSchema, opts?: JsonOptions) {
-    const ajv = new Ajv(opts)
+  private getJsonSchema(schema: JsonConfluentSchema, opts?: JsonOptions) {
+    const ajv = opts?.ajvInstance ?? new Ajv(opts)
     const validate = ajv.compile(JSON.parse(schema.schema))
     return validate
   }
@@ -39,12 +58,17 @@ export default class JsonSchema implements Schema {
   ): boolean {
     if (!this.validate(payload)) {
       if (opts?.errorHook) {
-        for (const err of this.validate.errors as DefinedError[]) {
-          opts.errorHook([err.dataPath], err.data, err.schema)
+        for (const err of this.validate.errors as AjvValidationError[]) {
+          const path = this.isOldAjvValidationError(err) ? err.dataPath : err.instancePath
+          opts.errorHook([path], err.data, err.schema)
         }
       }
       return false
     }
     return true
+  }
+
+  private isOldAjvValidationError(error: AjvValidationError): error is OldAjvValidationError {
+    return (error as OldAjvValidationError).dataPath != null
   }
 }

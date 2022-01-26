@@ -1,3 +1,6 @@
+import { Type } from 'avsc'
+import { Response } from 'mappersmith'
+
 import { encode, MAGIC_BYTE } from './wireEncoder'
 import decode from './wireDecoder'
 import { COMPATIBILITY, DEFAULT_SEPERATOR } from './constants'
@@ -18,8 +21,6 @@ import {
   ConfluentSubject,
   SchemaRegistryAPIClientOptions,
   AvroConfluentSchema,
-  ExtendedAvroSchema,
-  ResponseSchema,
 } from './@types'
 import {
   helperTypeFromSchemaType,
@@ -27,11 +28,8 @@ import {
   schemaFromConfluentSchema,
 } from './schemaTypeResolver'
 
-import { cloneDeep } from 'lodash'
-
-export interface RegisteredSchema {
+interface RegisteredSchema {
   id: number
-  subject: string
 }
 
 interface Opts {
@@ -40,13 +38,21 @@ interface Opts {
   subject: string
 }
 
+interface AvroDecodeOptions {
+  readerSchema?: RawAvroSchema | AvroSchema | Schema
+}
+interface DecodeOptions {
+  [SchemaType.AVRO]?: AvroDecodeOptions
+}
+
 const DEFAULT_OPTS = {
   compatibility: COMPATIBILITY.BACKWARD,
   separator: DEFAULT_SEPERATOR,
 }
 
 export default class SchemaRegistry {
-  private api: SchemaRegistryAPIClient
+  public api: SchemaRegistryAPIClient
+  private cacheMissRequests: { [key: number]: Promise<Response> } = {}
   private options: SchemaRegistryAPIClientOptions | undefined
 
   public cache: Cache
@@ -104,8 +110,7 @@ export default class SchemaRegistry {
     const confluentSchema: ConfluentSchema = this.getConfluentSchema(schema)
 
     const helper = helperTypeFromSchemaType(confluentSchema.type)
-    const options = cloneDeep(this.options)
-    const schemaInstance = schemaFromConfluentSchema(confluentSchema, options)
+    const schemaInstance = schemaFromConfluentSchema(confluentSchema, this.options)
     helper.validate(schemaInstance)
 
     let subject: ConfluentSubject
@@ -139,50 +144,29 @@ export default class SchemaRegistry {
     const response = await this.api.Subject.register({
       subject: subject.name,
       body: {
-        schemaType: confluentSchema.type,
+        schemaType: confluentSchema.type === SchemaType.AVRO ? undefined : confluentSchema.type,
         schema: confluentSchema.schema,
       },
     })
 
     const registeredSchema: RegisteredSchema = response.data()
     this.cache.setLatestRegistryId(subject.name, registeredSchema.id)
-    this.cache.setSchema(registeredSchema.id, schemaInstance)
+    this.cache.setSchema(registeredSchema.id, confluentSchema.type, schemaInstance)
 
-    return { id: registeredSchema.id, subject: subject.name }
+    return registeredSchema
   }
 
-  public async getSubjects(): Promise<Array<string>> {
-    const response = await this.api.Subject.all()
-    return response.data<Array<string>>()
-  }
+  private async _getSchema(
+    registryId: number,
+  ): Promise<{ type: SchemaType; schema: Schema | AvroSchema }> {
+    const cacheEntry = this.cache.getSchema(registryId)
 
-  public async getSchemas(): Promise<Array<ExtendedAvroSchema>> {
-    this.cache.clear()
-    const response = await this.api.Schema.all()
-    const foundSchemas: [ResponseSchema] = response.data()
-    const result: Array<ExtendedAvroSchema> = []
-    foundSchemas.forEach(foundSchema => result.push(this.convertSchema(foundSchema)))
-    return result
-  }
+    if (cacheEntry) {
+      return cacheEntry
+    }
 
-  public async getLatestSchema(subject: string): Promise<ExtendedAvroSchema> {
-    const response = await this.api.Subject.latestVersion({ subject })
-    return this.convertSchema(response.data())
-  }
-
-  public async getLatestSchemaId(subject: string): Promise<number> {
-    const response = await this.api.Subject.latestVersion({ subject })
-    const { id }: { id: number } = response.data()
-
-    return id
-  }
-
-  public async getSchema(registryId: number): Promise<ExtendedAvroSchema> {
-    const response = await this.api.Schema.find({ id: registryId })
-    return this.convertSchema(response.data())
-  }
-
-  private convertSchema(foundSchema: ResponseSchema) {
+    const response = await this.getSchemaOriginRequest(registryId)
+    const foundSchema: { schema: string; schemaType: string } = response.data()
     const rawSchema = foundSchema.schema
     const schemaType = schemaTypeFromString(foundSchema.schemaType)
 
@@ -194,14 +178,12 @@ export default class SchemaRegistry {
       type: schemaType,
       schema: rawSchema,
     }
-    const options = cloneDeep(this.options)
-    const schemaInstance = schemaFromConfluentSchema(confluentSchema, options)
-    return {
-      id: foundSchema.id,
-      version: foundSchema.version,
-      subject: foundSchema.subject,
-      schema: schemaInstance,
-    } as ExtendedAvroSchema
+    const schemaInstance = schemaFromConfluentSchema(confluentSchema, this.options)
+    return this.cache.setSchema(registryId, schemaType, schemaInstance)
+  }
+
+  public async getSchema(registryId: number): Promise<Schema | AvroSchema> {
+    return await (await this._getSchema(registryId)).schema
   }
 
   public async encode(registryId: number, payload: any): Promise<Buffer> {
@@ -211,14 +193,14 @@ export default class SchemaRegistry {
       )
     }
 
-    const schema = await this.getSchema(registryId)
+    const { schema } = await this._getSchema(registryId)
     try {
-      const serializedPayload = schema.schema.toBuffer(payload)
+      const serializedPayload = schema.toBuffer(payload)
       return encode(registryId, serializedPayload)
     } catch (error) {
       if (error instanceof ConfluentSchemaRegistryValidationError) throw error
 
-      const paths = this.collectInvalidPaths(schema.schema, payload)
+      const paths = this.collectInvalidPaths(schema, payload)
       throw new ConfluentSchemaRegistryValidationError(error, paths)
     }
   }
@@ -232,7 +214,7 @@ export default class SchemaRegistry {
     return paths
   }
 
-  public async decode(buffer: Buffer): Promise<any> {
+  public async decode(buffer: Buffer, options?: DecodeOptions): Promise<any> {
     if (!Buffer.isBuffer(buffer)) {
       throw new ConfluentSchemaRegistryArgumentError('Invalid buffer')
     }
@@ -246,8 +228,31 @@ export default class SchemaRegistry {
       )
     }
 
-    const schema = await this.getSchema(registryId)
-    return schema.schema.fromBuffer(payload)
+    const { type, schema: writerSchema } = await this._getSchema(registryId)
+
+    let rawReaderSchema
+    switch (type) {
+      case SchemaType.AVRO:
+        rawReaderSchema = options?.[SchemaType.AVRO]?.readerSchema as RawAvroSchema | AvroSchema
+    }
+    if (rawReaderSchema) {
+      const readerSchema = schemaFromConfluentSchema(
+        { type: SchemaType.AVRO, schema: rawReaderSchema },
+        this.options,
+      ) as AvroSchema
+      if (readerSchema.equals(writerSchema as Type)) {
+        /* Even when schemas are considered equal by `avsc`,
+         * they still aren't interchangeable:
+         * provided `readerSchema` may have different `opts` (e.g. logicalTypes / unionWrap flags)
+         * see https://github.com/mtth/avsc/issues/362 */
+        return readerSchema.fromBuffer(payload)
+      } else {
+        // decode using a resolver from writer type into reader type
+        return readerSchema.fromBuffer(payload, readerSchema.createResolver(writerSchema as Type))
+      }
+    }
+
+    return writerSchema.fromBuffer(payload)
   }
 
   public async getRegistryId(subject: string, version: number | string): Promise<number> {
@@ -266,7 +271,7 @@ export default class SchemaRegistry {
       const response = await this.api.Subject.registered({
         subject,
         body: {
-          schemaType: confluentSchema.type,
+          schemaType: confluentSchema.type === SchemaType.AVRO ? undefined : confluentSchema.type,
           schema: confluentSchema.schema,
         },
       })
@@ -279,6 +284,28 @@ export default class SchemaRegistry {
       }
 
       throw error
+    }
+  }
+
+  public async getLatestSchemaId(subject: string): Promise<number> {
+    const response = await this.api.Subject.latestVersion({ subject })
+    const { id }: { id: number } = response.data()
+
+    return id
+  }
+
+  private getSchemaOriginRequest(registryId: number) {
+    // ensure that cache-misses result in a single origin request
+    if (this.cacheMissRequests[registryId]) {
+      return this.cacheMissRequests[registryId]
+    } else {
+      const request = this.api.Schema.find({ id: registryId }).finally(() => {
+        delete this.cacheMissRequests[registryId]
+      })
+
+      this.cacheMissRequests[registryId] = request
+
+      return request
     }
   }
 }

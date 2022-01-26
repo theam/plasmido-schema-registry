@@ -1,13 +1,8 @@
+import { Type } from 'avsc'
 import { v4 as uuid } from 'uuid'
 
-import SchemaRegistry from './SchemaRegistry'
-import {
-  ConfluentSubject,
-  ConfluentSchema,
-  SchemaType,
-  AvroConfluentSchema,
-  JsonConfluentSchema,
-} from './@types'
+import ExtendedSchemaRegistry from './ExtendedSchemaRegistry'
+import { ConfluentSubject, ConfluentSchema, SchemaType } from './@types'
 import API, { SchemaRegistryAPIClient } from './api'
 import { COMPATIBILITY, DEFAULT_API_CLIENT_ID } from './constants'
 import encodedAnotherPersonV2Avro from '../fixtures/avro/encodedAnotherPersonV2'
@@ -15,6 +10,9 @@ import encodedAnotherPersonV2Json from '../fixtures/json/encodedAnotherPersonV2'
 import encodedAnotherPersonV2Proto from '../fixtures/proto/encodedAnotherPersonV2'
 import encodedNestedV2Proto from '../fixtures/proto/encodedNestedV2'
 import wrongMagicByte from '../fixtures/wrongMagicByte'
+import Ajv2020 from 'ajv8/dist/2020'
+import Ajv from 'ajv'
+import { ConfluentSchemaRegistryValidationError } from './errors'
 
 const REGISTRY_HOST = 'http://localhost:8982'
 const schemaRegistryAPIClientArgs = { host: REGISTRY_HOST }
@@ -25,7 +23,7 @@ const payload = { fullName: 'John Doe' }
 type KnownSchemaTypes = Exclude<SchemaType, SchemaType.UNKNOWN>
 
 describe('SchemaRegistry - new Api', () => {
-  let schemaRegistry: SchemaRegistry
+  let schemaRegistry: ExtendedSchemaRegistry
 
   const schemaStringsByType: Record<KnownSchemaTypes, any> = {
     [SchemaType.AVRO]: {
@@ -177,7 +175,7 @@ describe('SchemaRegistry - new Api', () => {
       }
 
       beforeEach(async () => {
-        schemaRegistry = new SchemaRegistry(schemaRegistryArgs)
+        schemaRegistry = new ExtendedSchemaRegistry(schemaRegistryArgs)
         await schemaRegistry.register(schema, { subject: subject.name })
       })
 
@@ -437,6 +435,22 @@ describe('SchemaRegistry - new Api', () => {
           ).rejects.toHaveProperty('message', 'Confluent_Schema_Registry - Schema not found')
         })
       })
+
+      describe('Extended tests', () => {
+        describe('getSubjects', () => {
+          it('return all', async () => {
+            const result = await schemaRegistry.getSubjects()
+            expect(result).toContain("AVRO_test")
+          })
+        })
+
+        describe('Get All Latest Schemas', () => {
+          it('return all schemas for all subjects', async () => {
+            const results = await schemaRegistry.getAllLatestSchemas()
+            expect(results.filter(result => result.subject === 'AVRO_test')).toBeTruthy()
+          })
+        })
+      })
     }),
   )
 
@@ -457,7 +471,7 @@ describe('SchemaRegistry - new Api', () => {
       type = SchemaType.PROTOBUF
 
     beforeAll(() => {
-      schemaRegistry = new SchemaRegistry(schemaRegistryArgs, v3Opts)
+      schemaRegistry = new ExtendedSchemaRegistry(schemaRegistryArgs, v3Opts)
     })
 
     it('encodes using schemaOptions', async () => {
@@ -523,7 +537,7 @@ describe('SchemaRegistry - new Api', () => {
         }
 
       beforeAll(() => {
-        schemaRegistry = new SchemaRegistry(schemaRegistryArgs)
+        schemaRegistry = new ExtendedSchemaRegistry(schemaRegistryArgs)
       })
 
       it('encodes', async () => {
@@ -559,6 +573,66 @@ describe('SchemaRegistry - new Api', () => {
 
         expect(data).toEqual(nestedPayload)
       })
+    })
+  })
+
+  describe('JSON Schema tests', () => {
+    describe('passing an Ajv instance in the constructor', () => {
+      test.each([
+        ['Ajv 7', new Ajv()],
+        ['Ajv2020', new Ajv2020()],
+      ])(
+        'Errors are thrown with their path in %s when the validation fails',
+        async (_, ajvInstance) => {
+          expect.assertions(3)
+          const registry = new ExtendedSchemaRegistry(schemaRegistryArgs, {
+            [SchemaType.JSON]: { ajvInstance },
+          })
+          const subject: ConfluentSubject = {
+            name: [SchemaType.JSON, 'com.org.domain.fixtures', 'AnotherPerson'].join('.'),
+          }
+          const schema: ConfluentSchema = {
+            type: SchemaType.JSON,
+            schema: schemaStringsByType[SchemaType.JSON].v1,
+          }
+
+          const { id: schemaId } = await registry.register(schema, { subject: subject.name })
+
+          try {
+            await schemaRegistry.encode(schemaId, { fullName: true })
+          } catch (error) {
+            expect(error).toBeInstanceOf(ConfluentSchemaRegistryValidationError)
+            expect(error.message).toEqual('invalid payload')
+            expect(error.paths).toEqual([['/fullName']])
+          }
+        },
+      )
+    })
+  })
+
+  describe('Avro tests', () => {
+    it('uses reader schema if specified (avro-only)', async () => {
+      const subject: ConfluentSubject = {
+        name: [SchemaType.AVRO, 'com.org.domain.fixtures', 'AnotherPerson'].join('.'),
+      }
+      const schema: ConfluentSchema = {
+        type: SchemaType.AVRO,
+        schema: schemaStringsByType[SchemaType.AVRO].v1,
+      }
+      const registryId = (await schemaRegistry.register(schema, { subject: subject.name })).id
+      const writerBuffer = Buffer.from(await schemaRegistry.encode(registryId, payload))
+      const readerSchema = JSON.parse(schemaStringsByType[SchemaType.AVRO].v2)
+
+      await expect(
+        schemaRegistry.decode(writerBuffer, { [SchemaType.AVRO]: { readerSchema } }),
+      ).resolves.toHaveProperty('city', 'Stockholm')
+
+      const registeredReaderSchema = await schemaRegistry.getSchema(registryId)
+      await expect(
+        schemaRegistry.decode(writerBuffer, {
+          [SchemaType.AVRO]: { readerSchema: registeredReaderSchema },
+        }),
+      )
     })
   })
 })

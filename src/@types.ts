@@ -1,4 +1,5 @@
-import { Resolver, ForSchemaOptions } from 'avsc'
+import { Resolver, ForSchemaOptions, Type } from 'avsc'
+import { ValidateFunction } from './JsonSchema'
 import Ajv from 'ajv'
 
 export enum SchemaType {
@@ -14,7 +15,11 @@ export interface SchemaHelper {
 }
 
 export type AvroOptions = Partial<ForSchemaOptions>
-export type JsonOptions = ConstructorParameters<typeof Ajv>[0]
+export type JsonOptions = ConstructorParameters<typeof Ajv>[0] & {
+  ajvInstance?: {
+    compile: (schema: any) => ValidateFunction
+  }
+}
 export type ProtoOptions = { messageName: string }
 
 export interface LegacyOptions {
@@ -43,22 +48,10 @@ export interface RawAvroSchema {
   fields: any[]
 }
 
-export interface AvroSchema extends Schema, RawAvroSchema {}
-
-export interface ResponseSchema {
-  id: number
-  version: number
-  subject: string
-  schema: string
-  schemaType: string
-}
-
-export interface ExtendedAvroSchema {
-  subject: string
-  version: number
-  id: number
-  schema: Schema | AvroSchema
-}
+export interface AvroSchema
+  extends Schema,
+    RawAvroSchema,
+    Pick<Type, 'equals' | 'createResolver'> {}
 
 export interface ConfluentSubject {
   name: string
@@ -66,7 +59,7 @@ export interface ConfluentSubject {
 
 export interface AvroConfluentSchema {
   type: SchemaType.AVRO
-  schema: string
+  schema: string | RawAvroSchema
 }
 
 export interface ProtoConfluentSchema {

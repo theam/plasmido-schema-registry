@@ -27,7 +27,6 @@ export interface SchemaRegistryAPIClientArgs {
 // TODO: Improve typings
 export type SchemaRegistryAPIClient = Client<{
   Schema: {
-    all: (_: any) => any
     find: (_: any) => any
   }
   Subject: {
@@ -62,10 +61,6 @@ export default ({
     ],
     resources: {
       Schema: {
-        all: {
-          method: 'get',
-          path: '/schemas',
-        },
         find: {
           method: 'get',
           path: '/schemas/ids/{id}',
